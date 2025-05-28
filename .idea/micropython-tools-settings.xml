@@ -3,9 +3,10 @@
   <component name="MicroPythonTools">
     <option name="activeStubsPackage" />
     <option name="areStubsEnabled" value="false" />
-    <option name="cachedFTPScriptPath" />
+    <option name="increaseBaudrateForFileTransfers" value="false" />
+    <option name="increasedFileTransferBaudrate" value="115200" />
     <option name="pluginEnabled" value="true" />
-    <option name="portName" value="/dev/ttyUSB0" />
-    <option name="settingsVersion" value="1" />
+    <option name="portName" value="/dev/ttyUSB2" />
+    <option name="showUploadPreviewDialog" value="false" />
   </component>
 </project>

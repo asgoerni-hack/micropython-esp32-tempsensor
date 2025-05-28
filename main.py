@@ -10,19 +10,18 @@ import json
 #     mip.install("")
 
 import onewire, ds18x20
-from machine import Pin, reset, deepsleep
+import machine
 
 from simple3 import MQTTClient, MQTTException
 
 # Configure GPIO
-led = Pin(2, Pin.OUT)
-respond = False
+# led = Pin(2, Pin.OUT)
+# respond = False
 #button = Pin(14, Pin.IN, Pin.PULL_DOWN)
 
-ds_pin = Pin(23)
+power_pin = machine.Pin(22,machine.Pin.OUT) # power pin for temp sensor
+ds_pin = machine.Pin(23,machine.Pin.IN)
 ds_sensor = ds18x20.DS18X20(onewire.OneWire(ds_pin))
-roms = ds_sensor.scan() # get list of temp sensors (can have multiple on same pin)
-print(f"Found DS devices: {roms}")
 
 # mosquito?
 hostname = config.HOSTNAME
@@ -36,8 +35,13 @@ subscribe_topic = config.SUBSCRIBE_TOPIC
 port_no = 1883
 ssl_enable = False
 
-time_last = time.time()
-time_last_temp = time.time()-20000 # so publishes on start-up
+# time_last = time.time()
+# time_last_temp = time.time()-20000 # so publishes on start-up
+
+# note: deepsleep results in reset of memory upon wake (code starts from top)
+#       so just need to sleep for 1 hr (for mqtt ping) and report temp every 1 hrs as well
+sleep_time = 3600000 # default to 1 hr in ms (60 x 60 x 1000)
+snooze_time = 5 # sec to sleep to allow code updates at reset
 
 def mqtt_connect():
 
@@ -53,16 +57,16 @@ def reconnect():
     time.sleep(5)
     machine.reset()
 
-def callback_handler(topic, message_receive):
-    print("Received message")
-    print(message_receive)
-    global respond
-    if message_receive.strip() == b'led_on':
-        led.value(1)
-    else:
-        led.value(0)
-
-    respond = True # send confirmation
+# def callback_handler(topic, message_receive):
+#     print("Received message")
+#     print(message_receive)
+#     global respond
+#     if message_receive.strip() == b'led_on':
+#         led.value(1)
+#     else:
+#         led.value(0)
+#
+#     respond = True # send confirmation
 
 try:
     client = mqtt_connect()
@@ -72,37 +76,71 @@ except OSError as e:
     print(e)
     reconnect()
 
-time.sleep(10) # give time to upload new version before going into deepsleep
+# setting clock frequency to maybe save some power?
+# machine.freq(40000000)
 
-while True:
+if machine.reset_cause() == machine.DEEPSLEEP_RESET:
+    print('woke from deep sleep')
+else:
+    print('power on hard reset, so pausing to allow new software upload...')
+    time.sleep(snooze_time)  # give time to upload new version before going into deepsleep
+
+# while True:
 
     # client.check_msg()
     # time.sleep(1)
-    deepsleep(600000) # 600 seconds (in ms)
 
-    if time.time()-time_last_temp>1799: #30 min - 1 sec
-        ds_sensor.convert_temp() # needed to generate temp from input pin
-        time.sleep_ms(750) # allow time for sensor to generate temp
-        temp = ds_sensor.read_temp(roms[0])*1.8+32
-        payload = {'sensorID':'PoolTemp',
-                   'location':'Pool',
-                   'data':[
-                       {'dataType':'Temperature',
-                        'reading':temp}
-                          ]
-                   }
-        print(f"Publishing Temp of {temp} degF on topic: {sensor_pub_topic}")
-        client.publish(sensor_pub_topic,json.dumps(payload),qos=0)
-        time_last_temp=time.time()
+power_pin.value(1) # power up temp sensor
+time.sleep(1)
+roms = ds_sensor.scan() # get list of temp sensors (can have multiple on same pin)
+print(f"Found DS devices: {roms}")
+ds_sensor.convert_temp() # needed to generate temp from input pin
+time.sleep_ms(750) # allow time for sensor to generate temp
+temp = ds_sensor.read_temp(roms[0])*1.8+32
+payload = {'sensorID':'PoolTemp',
+           'location':'Pool',
+           'data':[
+               {'dataType':'Temperature',
+                'reading':temp}
+                  ]
+           }
+print(f"Publishing Temp of {temp} degF on topic: {sensor_pub_topic}")
+client.publish(sensor_pub_topic,json.dumps(payload),qos=0)
+time.sleep(1) # allow publish to proceed
+
+# if time.time()-time_last_temp>1799: #30 min - 1 sec
+    #     ds_sensor.convert_temp() # needed to generate temp from input pin
+    #     time.sleep_ms(750) # allow time for sensor to generate temp
+    #     temp = ds_sensor.read_temp(roms[0])*1.8+32
+    #     payload = {'sensorID':'PoolTemp',
+    #                'location':'Pool',
+    #                'data':[
+    #                    {'dataType':'Temperature',
+    #                     'reading':temp}
+    #                       ]
+    #                }
+    #     print(f"Publishing Temp of {temp} degF on topic: {sensor_pub_topic}")
+    #     client.publish(sensor_pub_topic,json.dumps(payload),qos=0)
+    #     time_last_temp=time.time()
+    #     time.sleep(1) # allow publish to proceed?
+    #     sleep_time = 599000 # remove 1 sec from deepsleep time
+    # else:
+    #     # no longer need to check time_last since doing timed deepsleep between keep-alive...
+    #     print("sending ping for keep-alive")
+    #     client.ping()
+    #     sleep_time = 600000 # reset deepsleep time back to 600 sec
 
     # if time.time()-time_last>600:
     #     print("sending ping for keep-alive")
     #     client.ping()
     #
     #     time_last=time.time()
-    # no longer need to check time_last since doing timed deepsleep between keep-alive...
-    print("sending ping for keep-alive")
-    client.ping()
+
+print("Powering down sensor and entering deep sleep for 60 min.")
+power_pin.value(0) # power down temp sensor
+time.sleep(1)
+# machine.hibernate(sleep_time-1750) # micropython doesn't support hibernate per google search...
+machine.deepsleep(sleep_time-1750) # 600 seconds - 1 sec sensor power on - 750 ms measure time - 1 sec post publish (in ms)
 
     # if respond: #button.value():
     #     # pass
